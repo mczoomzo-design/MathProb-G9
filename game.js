@@ -26,6 +26,11 @@ var API = (function () {
     getQuestions: function (count, topic) { return call('getQuestions', { count: count, topic: topic || 'mixed' }); },
     generateQuestions: function (count) { return call('generateQuestions', { count: count }); },
     saveDaily: function (name, dateKey) { return call('saveDaily', { name: name, dateKey: dateKey }); },
+    adminAuth: function (pin) { return call('adminAuth', { pin: pin }); },
+    listQuestions: function (pin) { return call('listQuestions', { pin: pin }); },
+    addQuestion: function (pin, question) { return call('addQuestion', { pin: pin, question: question }); },
+    updateQuestion: function (pin, question) { return call('updateQuestion', { pin: pin, question: question }); },
+    deleteQuestion: function (pin, id) { return call('deleteQuestion', { pin: pin, id: id }); },
     ping: function () { return call('ping', {}); }
   };
 })();
@@ -75,6 +80,99 @@ var GENS = { dice: genDice, coin: genCoin, card: genCard, ball: genBall };
 function localSet(n, topics) { topics = topics && topics.length ? topics : ['dice', 'coin', 'card', 'ball']; var a = []; for (var i = 0; i < n; i++) a.push(GENS[pick(topics)](false)); return a; }
 function localBoss() { return GENS[pick(['dice', 'coin', 'card', 'ball'])](true); }
 
+/* ============ รูปแบบการเล่นแบบอื่น (ไม่ใช่แค่เลือกข้อ) ============ */
+// แต่ละ builder ผูก topic ไว้เพื่อให้โหมดฝึกตามหัวข้อกรองได้ q.type: mc|fraction|truefalse|estimate|multiselect
+
+// ----- FRACTION (เติมเศษส่วน) -----
+function fracQ(topic, diff, text, ansNum, ansDen, expl) { return { id: qid(), type: 'fraction', topic: topic, difficulty: diff, text: text, ansNum: ansNum, ansDen: ansDen, explanation: expl }; }
+var FRACTION_BUILDERS = [
+  function () { var t = 1 + rnd(6); return fracQ('dice', 'easy', 'ทอดลูกเต๋า 1 ลูก ความน่าจะเป็นที่จะได้แต้ม ' + t + ' — พิมพ์เป็นเศษส่วน', 1, 6, 'ได้แต้ม ' + t + ' 1 แบบ จาก 6 = 1/6'); },
+  function () { return fracQ('dice', 'medium', 'ทอดลูกเต๋า 1 ลูก ความน่าจะเป็นที่จะได้แต้มคู่ — พิมพ์เป็นเศษส่วน', 3, 6, 'แต้มคู่ 2,4,6 = 3/6 = 1/2'); },
+  function () { return fracQ('coin', 'easy', 'โยนเหรียญ 2 เหรียญ ความน่าจะเป็นที่จะได้หัวทั้งคู่ — พิมพ์เป็นเศษส่วน', 1, 4, '{HH,HT,TH,TT} ได้ HH 1 แบบ = 1/4'); },
+  function () { return fracQ('card', 'medium', 'หยิบไพ่ 1 ใบจาก 52 ใบ ความน่าจะเป็นที่จะได้ไพ่เอซ — พิมพ์เป็นเศษส่วน', 4, 52, 'เอซ 4 ใบ จาก 52 = 4/52 = 1/13'); },
+  function () { var r = 2 + rnd(4), b = 2 + rnd(4); return fracQ('ball', 'medium', 'ในถุงมีแดง ' + r + ' น้ำเงิน ' + b + ' ลูก หยิบ 1 ลูก ความน่าจะเป็นที่จะได้สีแดง — พิมพ์เป็นเศษส่วน', r, r + b, 'แดง ' + r + ' จาก ' + (r + b) + ' = ' + frac(r, r + b)); }
+];
+
+// ----- TRUE/FALSE (จริง/เท็จ) -----
+function tfQ(topic, diff, actualFrac, shownFrac, ctx) {
+  var isTrue = actualFrac === shownFrac;
+  return { id: qid(), type: 'truefalse', topic: topic, difficulty: diff, text: ctx + ' โอกาสเท่ากับ ' + shownFrac + ' — จริงหรือเท็จ?', isTrue: isTrue, explanation: 'ค่าที่ถูกต้องคือ ' + actualFrac };
+}
+var TF_BUILDERS = [
+  function () { var shown = pick(['1/2', '1/3', '2/3']); return tfQ('dice', 'easy', '1/2', shown, 'ทอดลูกเต๋า 1 ลูก ได้แต้มคู่'); },
+  function () { var shown = pick(['1/6', '1/3', '1/2']); return tfQ('dice', 'easy', '1/6', shown, 'ทอดลูกเต๋า 1 ลูก ได้แต้ม 5'); },
+  function () { var shown = pick(['3/4', '1/2', '1/4']); return tfQ('coin', 'medium', '3/4', shown, 'โยนเหรียญ 2 เหรียญ ได้หัวอย่างน้อย 1 เหรียญ'); },
+  function () { var shown = pick(['1/4', '1/13', '1/2']); return tfQ('card', 'medium', '1/4', shown, 'หยิบไพ่ 1 ใบ ได้ไพ่โพแดง'); }
+];
+
+// ----- ESTIMATE (ลากแถบประมาณค่า 0-100%) -----
+function estQ(topic, diff, text, ansVal, tol, expl) { return { id: qid(), type: 'estimate', topic: topic, difficulty: diff, text: text, ansVal: ansVal, tol: tol || 0.1, explanation: expl }; }
+var EST_BUILDERS = [
+  function () { return estQ('dice', 'easy', 'ลากแถบให้ตรงกับความน่าจะเป็นที่จะได้แต้มคู่ เมื่อทอดลูกเต๋า 1 ลูก', 0.5, 0.1, 'แต้มคู่ = 3/6 = 0.5 (50%)'); },
+  function () { return estQ('dice', 'medium', 'ลากแถบให้ตรงกับความน่าจะเป็นที่จะได้แต้ม ≥ 5 เมื่อทอดลูกเต๋า 1 ลูก', 2 / 6, 0.1, 'แต้ม 5,6 = 2/6 ≈ 0.33 (33%)'); },
+  function () { return estQ('coin', 'medium', 'ลากแถบให้ตรงกับความน่าจะเป็นที่จะได้หัวอย่างน้อย 1 เหรียญ เมื่อโยน 2 เหรียญ', 0.75, 0.1, '3/4 = 0.75 (75%)'); },
+  function () { return estQ('card', 'hard', 'ลากแถบให้ตรงกับความน่าจะเป็นที่จะได้ไพ่เอซ เมื่อหยิบ 1 ใบจาก 52 ใบ', 4 / 52, 0.07, '4/52 ≈ 0.077 (ประมาณ 8%)'); }
+];
+
+// ----- MULTISELECT (เลือกผลลัพธ์ที่เข้าเงื่อนไขทั้งหมด) -----
+function multiQ(topic, diff, text, items, favSet, expl) {
+  return { id: qid(), type: 'multiselect', topic: topic, difficulty: diff, text: text, items: items, favorable: favSet, explanation: expl };
+}
+var MULTI_BUILDERS = [
+  function () { return multiQ('dice', 'easy', 'แตะเลือกแต้มลูกเต๋า "ทั้งหมด" ที่เป็นเลขคู่', ['1', '2', '3', '4', '5', '6'], [1, 3, 5], 'เลขคู่บนลูกเต๋าคือ 2, 4, 6'); },
+  function () { return multiQ('dice', 'medium', 'แตะเลือกแต้มลูกเต๋า "ทั้งหมด" ที่หารด้วย 3 ลงตัว', ['1', '2', '3', '4', '5', '6'], [2, 5], 'หารด้วย 3 ลงตัวคือ 3 และ 6'); },
+  function () { return multiQ('dice', 'medium', 'แตะเลือกแต้มลูกเต๋า "ทั้งหมด" ที่มากกว่า 4', ['1', '2', '3', '4', '5', '6'], [4, 5], 'มากกว่า 4 คือ 5 และ 6'); },
+  function () { return multiQ('coin', 'medium', 'โยนเหรียญ 2 เหรียญ แตะเลือกผลลัพธ์ "ทั้งหมด" ที่มีหัว (H) อย่างน้อย 1 เหรียญ', ['HH', 'HT', 'TH', 'TT'], [0, 1, 2], 'มีหัวอย่างน้อย 1 คือ HH, HT, TH (ไม่นับ TT)'); }
+];
+
+var VARIED_ALL = []
+  .concat(FRACTION_BUILDERS.map(function (f) { return { topic: null, fn: f }; }))
+  .concat(TF_BUILDERS.map(function (f) { return { fn: f }; }))
+  .concat(EST_BUILDERS.map(function (f) { return { fn: f }; }))
+  .concat(MULTI_BUILDERS.map(function (f) { return { fn: f }; }));
+
+function buildOneVaried(topics) {
+  // สุ่มชนิด + หัวข้อ; ถ้าหัวข้อถูกจำกัด ให้กรอง
+  var tries = 0;
+  while (tries < 30) {
+    tries++;
+    var roll = rnd(5); // 0=mc, 1=fraction, 2=tf, 3=estimate, 4=multiselect (เพิ่มน้ำหนัก mc นิดหน่อย)
+    var q;
+    if (roll === 0) q = GENS[pick(topics)](false);
+    else if (roll === 1) q = pick(FRACTION_BUILDERS)();
+    else if (roll === 2) q = pick(TF_BUILDERS)();
+    else if (roll === 3) q = pick(EST_BUILDERS)();
+    else q = pick(MULTI_BUILDERS)();
+    if (!topics || topics.length === 4 || topics.indexOf(q.topic) !== -1) return q;
+  }
+  return GENS[pick(topics)](false);
+}
+function localVariedSet(n, topics) {
+  topics = topics && topics.length ? topics : ['dice', 'coin', 'card', 'ball'];
+  var a = []; for (var i = 0; i < n; i++) a.push(buildOneVaried(topics)); return a;
+}
+
+// ----- grading + time by type -----
+function gradeQ(q, resp) {
+  var type = q.type || 'mc';
+  if (type === 'mc') return resp === q.correctIndex;
+  if (type === 'fraction') { if (!resp || !resp.den) return false; return q.ansNum * resp.den === q.ansDen * resp.num; }
+  if (type === 'truefalse') return resp === q.isTrue;
+  if (type === 'estimate') return Math.abs(resp - q.ansVal) <= (q.tol || 0.1);
+  if (type === 'multiselect') { var a = (resp || []).slice().sort(function (x, y) { return x - y; }); var b = (q.favorable || []).slice().sort(function (x, y) { return x - y; }); if (a.length !== b.length) return false; for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; }
+  return false;
+}
+function timeForType(q) {
+  var base = q.difficulty === 'hard' ? 12 : q.difficulty === 'medium' ? 15 : 18;
+  var t = q.type || 'mc';
+  if (t === 'truefalse') return Math.max(8, base - 4);
+  if (t === 'fraction') return base + 4;
+  if (t === 'estimate') return base + 3;
+  if (t === 'multiselect') return base + 6;
+  return base;
+}
+
+
 // ---------- Rank ----------
 var RANKS = [{ n: 'บรอนซ์', m: 0, c: '#a8703f' }, { n: 'ซิลเวอร์', m: 300, c: '#8b96a5' }, { n: 'โกลด์', m: 800, c: '#c9971f' }, { n: 'แพลทินัม', m: 1600, c: '#3f9b8f' }, { n: 'ไดมอนด์', m: 3000, c: '#4f7fd6' }, { n: 'มาสเตอร์', m: 5000, c: '#8c4fd6' }];
 function rankFor(xp) { var r = RANKS[0]; for (var i = 0; i < RANKS.length; i++) if (xp >= RANKS[i].m) r = RANKS[i]; return r; }
@@ -115,33 +213,49 @@ async function awardXP(mode, score) {
 // ================= Screens =================
 function screenHome() {
   var s = el('div', 'screen home');
+
+  // header bar (full width)
+  var hdr = el('div', 'app-header');
   var brand = el('div', 'brand');
   brand.appendChild(el('div', 'brand-badge', 'P'));
   var bt = el('div'); bt.appendChild(el('h1', null, 'เกมความน่าจะเป็น')); bt.appendChild(el('p', 'sub', 'ฝึกความน่าจะเป็น ม.3 แบบสนุก ท้าทาย')); brand.appendChild(bt);
-  s.appendChild(brand);
+  hdr.appendChild(brand);
+  var hdrRight = el('div', 'header-right');
+  hdrRight.appendChild(el('span', 'status-pill ' + (state.online ? 'online' : 'offline'), state.online ? '● ออนไลน์' : '○ ออฟไลน์'));
+  var adminLink = el('button', 'admin-link', '⚙ สำหรับครู'); adminLink.addEventListener('click', function () { adminGate(); }); hdrRight.appendChild(adminLink);
+  hdr.appendChild(hdrRight);
+  s.appendChild(hdr);
 
-  s.appendChild(el('span', 'status-pill ' + (state.online ? 'online' : 'offline'), state.online ? '● เชื่อมต่อเซิร์ฟเวอร์แล้ว' : '○ โหมดออฟไลน์ (ยังไม่ตั้งค่า API)'));
+  var layout = el('div', 'home-layout');
 
+  // ----- side: identity -----
+  var side = el('div', 'home-side');
   var r = rankFor(state.xp), nx = nextRank(state.xp);
   var rc = el('div', 'card rank-card'); rc.style.borderColor = r.c;
   var rr = el('div', 'rank-row'); var rb = el('span', 'rank-badge', r.n); rb.style.background = r.c; rr.appendChild(rb); rr.appendChild(el('span', 'xp-text', state.xp + ' XP')); rc.appendChild(rr);
   if (nx) { var pt = el('div', 'progress-track'); var pf = el('div', 'progress-fill'); pf.style.width = Math.min(100, ((state.xp - r.m) / (nx.m - r.m)) * 100) + '%'; pf.style.background = r.c; pt.appendChild(pf); rc.appendChild(pt); rc.appendChild(el('p', 'hint', 'อีก ' + (nx.m - state.xp) + ' XP ถึงระดับ ' + nx.n)); }
-  s.appendChild(rc);
+  else rc.appendChild(el('p', 'hint', 'ระดับสูงสุดแล้ว!'));
+  side.appendChild(rc);
 
   var nameCard = el('div', 'card');
   nameCard.appendChild(el('label', 'field-label', 'ชื่อผู้เล่น (ผูก Rank/XP กับชื่อนี้)'));
-  var inp = el('input', 'text-input'); inp.value = state.name; inp.placeholder = 'ใส่ชื่อของคุณ เช่น ปอนด์-ม.3/2'; inp.maxLength = 20;
+  var inp = el('input', 'text-input'); inp.value = state.name; inp.placeholder = 'เช่น ปอนด์-ม.3/2'; inp.maxLength = 20;
   inp.addEventListener('input', function () { state.name = inp.value; });
   inp.addEventListener('blur', async function () { saveRemembered(state.name); await refreshProfile(); render(screenHome); });
   nameCard.appendChild(inp);
-  nameCard.appendChild(el('p', 'hint', 'พิมพ์ชื่อเดิมกลับมาเมื่อไหร่ Rank/XP เดิมกลับมาด้วย — ใช้ชื่อไม่ซ้ำกับเพื่อน'));
-  s.appendChild(nameCard);
+  nameCard.appendChild(el('p', 'hint', 'พิมพ์ชื่อเดิมกลับมา Rank/XP เดิมกลับมาด้วย — ใช้ชื่อไม่ซ้ำกับเพื่อน'));
+  if (!state.name.trim()) nameCard.appendChild(el('p', 'warn-text', 'ใส่ชื่อก่อนถึงจะเริ่มเล่นได้'));
+  side.appendChild(nameCard);
 
-  if (!state.name.trim()) s.appendChild(el('p', 'warn-text', 'ใส่ชื่อก่อนถึงจะเริ่มเล่นได้'));
+  var lbBtn = el('button', 'btn-primary board-btn', '🏆 ดูสกอร์บอร์ด'); lbBtn.addEventListener('click', function () { leaderboard('all'); }); side.appendChild(lbBtn);
+  layout.appendChild(side);
 
+  // ----- main: modes -----
+  var main = el('div', 'home-main');
+  main.appendChild(el('h2', 'section-title', 'เลือกโหมดการเล่น'));
   var isDaily = state.dailyDate === todayKey();
   var modes = [
-    { icon: '⚡', t: 'Quick Quiz', d: '10 ข้อ จับเวลา ตอบเร็วได้โบนัส', go: function () { startQuiz('quick', null, function () { return getPool(10, 'mixed'); }, difTime); } },
+    { icon: '⚡', t: 'Quick Quiz', d: '10 ข้อ จับเวลา ตอบเร็วได้โบนัส หลายรูปแบบคำถาม', go: function () { startQuiz('quick', null, function () { return getPool(10, 'mixed'); }, difTime); } },
     { icon: '❤️', t: 'Survival', d: 'มี 3 หัวใจ เล่นจนหมดหัวใจ', go: function () { startQuiz('survival', 3, function () { return getPool(60, 'mixed'); }, difTime); } },
     { icon: '⚔️', t: 'Boss Battle', d: 'ผ่าน 5 ด่าน เจอบอสทุกด่าน', go: startBoss },
     { icon: '🤺', t: 'PvP Duel', d: 'ผลัดกันตอบ 2 คน หลอดเลือดใครหมดก่อนแพ้', go: pvpSetup },
@@ -154,35 +268,30 @@ function screenHome() {
     b.appendChild(el('span', 'mode-icon', m.icon)); b.appendChild(el('span', 'mode-title', m.t)); b.appendChild(el('span', 'mode-desc', m.d));
     b.addEventListener('click', m.go); grid.appendChild(b);
   });
-  s.appendChild(grid);
+  main.appendChild(grid);
+  main.appendChild(el('p', 'formats-note', 'แต่ละโหมดมีคำถามหลายรูปแบบ: เลือกข้อ · เติมเศษส่วน · จริง/เท็จ · ลากแถบประมาณค่า · เลือกผลลัพธ์หลายข้อ'));
+  layout.appendChild(main);
 
-  var online = el('button', 'btn-primary', '🌐 เล่นออนไลน์กับเพื่อน (2–4 คน)');
-  online.disabled = !state.name.trim();
-  online.style.background = 'linear-gradient(90deg,#0e6e5f,#3f9b8f)';
-  online.addEventListener('click', function () { if (window.startOnline) window.startOnline(); });
-  s.appendChild(online);
-
-  var row = el('div', 'btn-row');
-  var aiBtn = el('button', 'btn-secondary', '✨ สร้างโจทย์ใหม่ด้วย AI');
-  aiBtn.disabled = !state.name.trim();
-  aiBtn.addEventListener('click', async function () {
-    if (!API.configured) { aiBtn.textContent = 'ต้องตั้งค่า API ก่อน'; return; }
-    aiBtn.disabled = true; aiBtn.innerHTML = '<span class="spinner"></span> กำลังสร้าง...';
-    try { var d = await API.generateQuestions(8); aiBtn.textContent = '✨ สร้างเพิ่มแล้ว ' + d.added + ' ข้อ'; }
-    catch (e) { aiBtn.textContent = 'สร้างไม่สำเร็จ'; }
-    setTimeout(function () { aiBtn.disabled = false; aiBtn.textContent = '✨ สร้างโจทย์ใหม่ด้วย AI'; }, 2500);
-  });
-  row.appendChild(aiBtn);
-  var lbBtn = el('button', 'btn-secondary', '🏆 กระดานคะแนน'); lbBtn.addEventListener('click', function () { leaderboard('all'); }); row.appendChild(lbBtn);
-  s.appendChild(row);
+  s.appendChild(layout);
   return s;
 }
 
-function difTime(q) { return q.difficulty === 'hard' ? 12 : q.difficulty === 'medium' ? 15 : 18; }
+function difTime(q) { return timeForType(q); }
 
 async function getPool(n, topic) {
-  if (API.configured) { try { var d = await API.getQuestions(n, topic); if (d.questions && d.questions.length) return d.questions; } catch (e) {} }
-  return localSet(n, topic === 'mixed' ? null : [topic]);
+  var out = localVariedSet(n, topic === 'mixed' ? null : [topic]);
+  if (API.configured) {
+    try {
+      var want = Math.max(2, Math.round(n * 0.3));
+      var d = await API.getQuestions(want, topic);
+      if (d.questions && d.questions.length) {
+        var bank = d.questions.map(function (q) { q.type = 'mc'; return q; });
+        for (var i = 0; i < bank.length && i < out.length; i++) out[i] = bank[i];
+        out = shuffle(out);
+      }
+    } catch (e) {}
+  }
+  return out;
 }
 
 // ---------- Generic quiz runner ----------
@@ -193,73 +302,146 @@ async function startQuiz(mode, hpStart, poolFn, timeFn, manual) {
 }
 
 function runQuiz(cfg) {
-  var idx = 0, hp = cfg.hpStart || 0, combo = 0, score = 0, correct = 0, selected = null, timer = null, timeLeft = 0, finished = false;
+  var idx = 0, hp = cfg.hpStart || 0, combo = 0, score = 0, correct = 0;
+  var answered = null, wasCorrect = false, draft = null; // draft = staged response before submit
+  var timer = null, timeLeft = 0, finished = false;
   var s = el('div', 'screen playing');
   root.replaceChildren(s);
 
   function clearT() { if (timer) { clearInterval(timer); timer = null; } }
-  function stop(cleared) {
-    if (finished) return; finished = true; clearT();
-    onQuizDone(cfg.mode, score, correct, idx + (selected !== null ? 1 : 0), cleared);
-  }
+  function stop(cleared) { if (finished) return; finished = true; clearT(); onQuizDone(cfg.mode, score, correct, idx + (answered !== null ? 1 : 0), cleared); }
+  function maxTimeOf(q) { return cfg.timeFn ? cfg.timeFn(q) : null; }
+
   function draw() {
     clear(s);
+    var q = cfg.questions[idx];
     var top = el('div', 'hud');
     var back = el('button', 'back-link', '← กลับ'); back.addEventListener('click', function () { clearT(); render(screenHome); }); top.appendChild(back);
-    top.appendChild(el('div', 'hud-score', cfg.label || cfg.mode + ' · ' + score + ' คะแนน')); s.appendChild(top);
+    top.appendChild(el('div', 'hud-score', (cfg.label || cfg.mode) + ' · ' + score + ' คะแนน')); s.appendChild(top);
 
     var row2 = el('div', 'hud');
     if (cfg.hpStart) { var hb = el('div', 'hud-hearts'); for (var i = 0; i < cfg.hpStart; i++) hb.appendChild(el('span', 'heart ' + (i < hp ? 'full' : 'empty'), '♥')); row2.appendChild(hb); }
     else row2.appendChild(el('span', 'hint', 'ข้อ ' + (idx + 1) + ' / ' + cfg.questions.length));
     row2.appendChild(el('div', 'hud-combo', combo > 1 ? '🔥 x' + combo : '')); s.appendChild(row2);
 
-    var q = cfg.questions[idx];
-    var maxT = cfg.timeFn ? cfg.timeFn(q) : null;
+    var maxT = maxTimeOf(q);
     if (maxT) { var tt = el('div', 'timer-track'); var tf = el('div', 'timer-fill' + (timeLeft <= 4 ? ' low' : '')); tf.style.width = (timeLeft / maxT) * 100 + '%'; tt.appendChild(tf); s.appendChild(tt); }
 
+    var typeLabel = { fraction: 'เติมเศษส่วน', truefalse: 'จริง/เท็จ', estimate: 'ประมาณค่า', multiselect: 'เลือกหลายข้อ' }[q.type];
     var qc2 = el('div', 'card question-card diff-' + q.difficulty);
-    qc2.appendChild(el('span', 'diff-tag', q.difficulty === 'easy' ? 'ง่าย' : q.difficulty === 'medium' ? 'ปานกลาง' : 'ยาก'));
+    var tagWrap = el('div', 'q-tags');
+    tagWrap.appendChild(el('span', 'diff-tag', q.difficulty === 'easy' ? 'ง่าย' : q.difficulty === 'medium' ? 'ปานกลาง' : 'ยาก'));
+    if (typeLabel) tagWrap.appendChild(el('span', 'type-tag', typeLabel));
+    qc2.appendChild(tagWrap);
     qc2.appendChild(el('p', 'question-text', q.text)); s.appendChild(qc2);
 
-    var og = el('div', 'options-grid');
-    q.options.forEach(function (opt, i) {
-      var b = el('button', 'option-btn', opt);
-      if (selected !== null) { if (i === q.correctIndex) b.className += ' correct'; else if (i === selected) b.className += ' wrong'; b.disabled = true; }
-      b.addEventListener('click', function () { answer(i); });
-      og.appendChild(b);
-    });
-    s.appendChild(og);
+    renderBody(q);
 
-    if (selected !== null) {
-      var fb = el('div', 'feedback-banner ' + (selected === q.correctIndex ? 'correct' : 'wrong'), selected === q.correctIndex ? 'ถูกต้อง!' : 'ผิด — ' + q.explanation);
+    if (answered !== null) {
+      var fb = el('div', 'feedback-banner ' + (wasCorrect ? 'correct' : 'wrong'), wasCorrect ? 'ถูกต้อง! +' + lastGain + ' คะแนน' : 'ยังไม่ถูก — ' + q.explanation);
       s.appendChild(fb);
-      if (cfg.manual) { var nb = el('button', 'btn-primary', idx + 1 >= cfg.questions.length ? 'จบการฝึก' : 'ข้อถัดไป'); nb.addEventListener('click', function () { idx + 1 >= cfg.questions.length ? stop(true) : next(); }); s.appendChild(nb); }
+      if (cfg.manual) { var nb = el('button', 'btn-primary', idx + 1 >= cfg.questions.length ? 'จบการฝึก' : 'ข้อถัดไป →'); nb.addEventListener('click', function () { idx + 1 >= cfg.questions.length ? stop(true) : next(); }); s.appendChild(nb); }
     }
   }
+
+  var lastGain = 0;
+
+  function renderBody(q) {
+    var type = q.type || 'mc';
+    var locked = answered !== null;
+    if (type === 'mc') {
+      var og = el('div', 'options-grid');
+      q.options.forEach(function (opt, i) {
+        var b = el('button', 'option-btn', opt);
+        if (locked) { if (i === q.correctIndex) b.className += ' correct'; else if (answered === i) b.className += ' wrong'; b.disabled = true; }
+        else b.addEventListener('click', function () { submit(i); });
+        og.appendChild(b);
+      });
+      s.appendChild(og);
+    } else if (type === 'truefalse') {
+      var tf = el('div', 'tf-grid');
+      [['จริง', true], ['เท็จ', false]].forEach(function (o) {
+        var b = el('button', 'tf-btn ' + (o[1] ? 'yes' : 'no'), o[0]);
+        if (locked) { if (o[1] === q.isTrue) b.className += ' correct'; else if (answered === o[1]) b.className += ' wrong'; b.disabled = true; }
+        else b.addEventListener('click', function () { submit(o[1]); });
+        tf.appendChild(b);
+      });
+      s.appendChild(tf);
+    } else if (type === 'fraction') {
+      var box = el('div', 'card frac-card');
+      var fr = el('div', 'frac-input');
+      var top = el('input', 'frac-field'); top.type = 'number'; top.placeholder = 'เศษ'; top.inputMode = 'numeric';
+      var bar = el('div', 'frac-bar');
+      var bot = el('input', 'frac-field'); bot.type = 'number'; bot.placeholder = 'ส่วน'; bot.inputMode = 'numeric';
+      fr.appendChild(top); fr.appendChild(bar); fr.appendChild(bot); box.appendChild(fr);
+      if (locked) { top.value = draft ? draft.num : ''; bot.value = draft ? draft.den : ''; top.disabled = bot.disabled = true; box.appendChild(el('p', 'hint', 'เฉลย: ' + frac(q.ansNum, q.ansDen))); }
+      else { var sb = el('button', 'btn-primary submit-btn', 'ส่งคำตอบ'); sb.addEventListener('click', function () { submit({ num: parseInt(top.value, 10), den: parseInt(bot.value, 10) }); }); box.appendChild(sb); }
+      s.appendChild(box);
+    } else if (type === 'estimate') {
+      var ebox = el('div', 'card est-card');
+      var pct = el('div', 'est-value', (draft != null ? Math.round(draft * 100) : 50) + '%');
+      ebox.appendChild(pct);
+      var sl = el('input', 'est-slider'); sl.type = 'range'; sl.min = '0'; sl.max = '100'; sl.value = (draft != null ? Math.round(draft * 100) : 50);
+      sl.addEventListener('input', function () { pct.textContent = sl.value + '%'; });
+      if (locked) { sl.value = Math.round((draft || 0) * 100); sl.disabled = true; pct.textContent = sl.value + '%'; }
+      ebox.appendChild(sl);
+      var scale = el('div', 'est-scale'); scale.appendChild(el('span', null, '0% ไม่เกิด')); scale.appendChild(el('span', null, '50%')); scale.appendChild(el('span', null, '100% เกิดแน่')); ebox.appendChild(scale);
+      if (locked) { ebox.appendChild(el('p', 'hint', 'ค่าที่ถูก ≈ ' + Math.round(q.ansVal * 100) + '% · ' + q.explanation)); }
+      else { var esb = el('button', 'btn-primary submit-btn', 'ส่งคำตอบ'); esb.addEventListener('click', function () { submit(parseInt(sl.value, 10) / 100); }); ebox.appendChild(esb); }
+      s.appendChild(ebox);
+    } else if (type === 'multiselect') {
+      var sel = draft && draft.slice ? draft.slice() : [];
+      var grid = el('div', 'multi-grid');
+      q.items.forEach(function (label, i) {
+        var b = el('button', 'multi-chip', label);
+        var isSel = sel.indexOf(i) !== -1;
+        if (isSel) b.className += ' on';
+        if (locked) {
+          var fav = q.favorable.indexOf(i) !== -1;
+          if (fav) b.className += ' correct'; else if (isSel) b.className += ' wrong';
+          b.disabled = true;
+        } else {
+          b.addEventListener('click', function () { var p = sel.indexOf(i); if (p === -1) sel.push(i); else sel.splice(p, 1); draft = sel.slice(); draw(); });
+        }
+        grid.appendChild(b);
+      });
+      s.appendChild(grid);
+      if (!locked) { var msb = el('button', 'btn-primary submit-btn', 'ส่งคำตอบ (' + sel.length + ' ข้อ)'); msb.addEventListener('click', function () { submit(sel.slice()); }); s.appendChild(msb); }
+    }
+  }
+
+  function scoreGain(q, maxT) {
+    var base = q.difficulty === 'hard' ? 30 : q.difficulty === 'medium' ? 20 : 10;
+    var sb = maxT ? Math.round((timeLeft / maxT) * 10) : 0;
+    var mult = 1 + Math.min(combo, 5) * 0.2; // combo already incremented
+    return Math.round((base + sb) * mult);
+  }
+
+  function submit(resp) {
+    if (answered !== null) return; clearT();
+    var q = cfg.questions[idx]; answered = resp; if (q.type === 'fraction') draft = resp; if (q.type === 'estimate') draft = resp; if (q.type === 'multiselect') draft = resp;
+    var ok = gradeQ(q, resp); wasCorrect = ok;
+    var maxT = maxTimeOf(q);
+    if (ok) { correct++; combo++; lastGain = scoreGain(q, maxT); score += lastGain; draw(); if (!cfg.manual) setTimeout(next, 950); }
+    else {
+      combo = 0;
+      if (cfg.hpStart) { hp--; draw(); if (hp <= 0) { setTimeout(function () { stop(false); }, 1200); return; } if (!cfg.manual) setTimeout(next, 1200); }
+      else { draw(); if (!cfg.manual) setTimeout(next, 1200); }
+    }
+  }
+
   function startTimer() {
     var q = cfg.questions[idx]; if (!cfg.timeFn) return; var maxT = cfg.timeFn(q); timeLeft = maxT;
     clearT(); timer = setInterval(function () { timeLeft--; if (timeLeft <= 0) { clearT(); onTimeout(); } else { var tf = s.querySelector('.timer-fill'); if (tf) { tf.style.width = (timeLeft / maxT) * 100 + '%'; if (timeLeft <= 4) tf.className = 'timer-fill low'; } } }, 1000);
   }
-  function next() { idx++; if (idx >= cfg.questions.length) { stop(true); return; } selected = null; draw(); startTimer(); }
+  function next() { idx++; if (idx >= cfg.questions.length) { stop(true); return; } answered = null; draft = null; wasCorrect = false; draw(); startTimer(); }
   function onTimeout() {
-    combo = 0; selected = -1; draw();
-    if (cfg.hpStart) { hp--; if (hp <= 0) setTimeout(function () { stop(false); }, 900); else setTimeout(next, 900); }
-    else setTimeout(next, 900);
+    if (answered !== null) return;
+    combo = 0; answered = '__timeout__'; wasCorrect = false;
+    if (cfg.hpStart) { hp--; draw(); if (hp <= 0) { setTimeout(function () { stop(false); }, 950); return; } setTimeout(next, 950); }
+    else { draw(); setTimeout(next, 950); }
   }
-  function answer(i) {
-    if (selected !== null) return; clearT(); selected = i;
-    var q = cfg.questions[idx]; var ok = i === q.correctIndex; var maxT = cfg.timeFn ? cfg.timeFn(q) : null;
-    if (ok) {
-      correct++; var base = q.difficulty === 'hard' ? 30 : q.difficulty === 'medium' ? 20 : 10;
-      var sb = maxT ? Math.round((timeLeft / maxT) * 10) : 0; combo++; var mult = 1 + Math.min(combo - 1, 5) * 0.2;
-      score += Math.round((base + sb) * mult); draw();
-      if (!cfg.manual) setTimeout(next, 800);
-    } else {
-      combo = 0; draw();
-      if (cfg.hpStart) { hp--; if (hp <= 0) { setTimeout(function () { stop(false); }, 1100); return; } if (!cfg.manual) setTimeout(next, 1100); }
-      else if (!cfg.manual) setTimeout(next, 1100);
-    }
-  }
+
   cfg.label = ({ quick: 'Quick Quiz', survival: 'Survival', daily: 'Daily', practice: 'Practice' })[cfg.mode] || cfg.mode;
   draw(); startTimer();
 }
@@ -463,7 +645,7 @@ async function leaderboard(filter) {
   s.appendChild(el('p', 'sub-note', API.configured ? (filter === 'all' ? 'อันดับรวมตาม XP สะสม' : 'อันดับตามคะแนนดีสุดของโหมดนี้') : 'โหมดออฟไลน์ — แสดงเฉพาะสถิติในเครื่องนี้'));
 
   var tabs = el('div', 'sb-tabs');
-  [['all', 'อันดับรวม'], ['online', '🌐 Online'], ['quick', '⚡ Quick'], ['survival', '❤️ Survival'], ['boss', '⚔️ Boss'], ['daily', '📅 Daily']].forEach(function (f) {
+  [['all', 'อันดับรวม'], ['quick', '⚡ Quick'], ['survival', '❤️ Survival'], ['boss', '⚔️ Boss'], ['daily', '📅 Daily']].forEach(function (f) {
     var b = el('button', 'sb-tab' + (filter === f[0] ? ' active' : ''), f[1]); b.addEventListener('click', function () { leaderboard(f[0]); }); tabs.appendChild(b);
   });
   s.appendChild(tabs);
@@ -513,6 +695,135 @@ function offlineScoreboard(filter) {
 // ---------- render ----------
 function render(fn) { root.replaceChildren(fn()); }
 function renderLoading() { var s = el('div', 'screen home'); s.appendChild(el('p', 'hint', '')); s.lastChild.innerHTML = '<span class="spinner"></span> กำลังโหลดโจทย์...'; root.replaceChildren(s); }
+
+// ---------- Admin (สำหรับครู: จัดการคลังโจทย์) ----------
+var _adminPin = '';
+function adminGate() {
+  if (!API.configured) { onlinelessNotice('ต้องตั้งค่า API (config.js) ก่อนถึงจะใช้ระบบจัดการโจทย์ได้'); return; }
+  var s = el('div', 'screen home');
+  s.appendChild(el('h1', null, '⚙ สำหรับครู'));
+  s.appendChild(el('p', 'sub-note', 'ใส่รหัสผ่านผู้ดูแลเพื่อจัดการคลังโจทย์ (เพิ่ม/แก้/ลบ)'));
+  var c = el('div', 'card');
+  c.appendChild(el('label', 'field-label', 'รหัสผ่านผู้ดูแล'));
+  var inp = el('input', 'text-input'); inp.type = 'password'; inp.placeholder = 'รหัส PIN'; c.appendChild(inp);
+  var msg = el('p', 'warn-text', ''); msg.style.display = 'none'; c.appendChild(msg);
+  var go = el('button', 'btn-primary submit-btn', 'เข้าสู่ระบบ');
+  go.addEventListener('click', async function () {
+    go.disabled = true; go.textContent = 'กำลังตรวจสอบ...';
+    try { await API.adminAuth(inp.value); _adminPin = inp.value; adminManager(); }
+    catch (e) { msg.textContent = e.message || 'รหัสผ่านไม่ถูกต้อง'; msg.style.display = 'block'; go.disabled = false; go.textContent = 'เข้าสู่ระบบ'; }
+  });
+  c.appendChild(go);
+  s.appendChild(c);
+  s.appendChild(el('p', 'hint', 'ตั้งรหัสได้ที่ Script Properties: ADMIN_PIN (ค่าเริ่มต้น 1234)'));
+  var bk = el('button', 'btn-secondary', 'กลับหน้าแรก'); bk.addEventListener('click', function () { render(screenHome); }); s.appendChild(bk);
+  root.replaceChildren(s);
+}
+function onlinelessNotice(msg) {
+  var s = el('div', 'screen home'); s.appendChild(el('h1', null, '⚙ สำหรับครู'));
+  var c = el('div', 'card'); c.appendChild(el('p', 'warn-text', msg)); s.appendChild(c);
+  var bk = el('button', 'btn-primary', 'กลับหน้าแรก'); bk.addEventListener('click', function () { render(screenHome); }); s.appendChild(bk);
+  root.replaceChildren(s);
+}
+
+async function adminManager() {
+  renderLoading();
+  var qs = [];
+  try { var d = await API.listQuestions(_adminPin); qs = d.questions || []; } catch (e) { onlinelessNotice('โหลดคลังโจทย์ไม่สำเร็จ: ' + e.message); return; }
+  var s = el('div', 'screen home');
+  var hdr = el('div', 'app-header');
+  hdr.appendChild(el('h1', null, '⚙ จัดการคลังโจทย์'));
+  var hr = el('div', 'header-right');
+  var addBtn = el('button', 'btn-primary', '➕ เพิ่มโจทย์'); addBtn.style.padding = '10px 16px'; addBtn.addEventListener('click', function () { adminEdit(null); }); hr.appendChild(addBtn);
+  hdr.appendChild(hr); s.appendChild(hdr);
+  s.appendChild(el('p', 'sub-note', 'มีโจทย์ในคลัง ' + qs.length + ' ข้อ (โจทย์เหล่านี้เป็นแบบเลือกตอบ ผสมกับคำถามหลายรูปแบบที่ระบบสร้างอัตโนมัติตอนเล่น)'));
+
+  var list = el('div', 'admin-list');
+  if (!qs.length) list.appendChild(el('div', 'sb-empty', 'ยังไม่มีโจทย์ในคลัง กด "เพิ่มโจทย์" เพื่อสร้าง'));
+  qs.forEach(function (q) {
+    var row = el('div', 'admin-row');
+    var mid = el('div', 'admin-mid');
+    var tags = el('div', 'q-tags'); tags.appendChild(el('span', 'diff-tag', q.difficulty)); tags.appendChild(el('span', 'type-tag', q.topic)); if (q.source) tags.appendChild(el('span', 'src-tag', q.source));
+    mid.appendChild(tags);
+    mid.appendChild(el('p', 'admin-qtext', q.text));
+    mid.appendChild(el('p', 'admin-ans', 'เฉลย: ' + (q.options[q.correctIndex] || '-')));
+    row.appendChild(mid);
+    var acts = el('div', 'admin-acts');
+    var ed = el('button', 'icon-btn', '✏️'); ed.title = 'แก้ไข'; ed.addEventListener('click', function () { adminEdit(q); }); acts.appendChild(ed);
+    var del = el('button', 'icon-btn danger', '🗑'); del.title = 'ลบ'; del.addEventListener('click', function () { adminDelete(q); }); acts.appendChild(del);
+    row.appendChild(acts);
+    list.appendChild(row);
+  });
+  s.appendChild(list);
+  var bk = el('button', 'btn-secondary', 'ออกจากระบบจัดการ'); bk.addEventListener('click', function () { _adminPin = ''; render(screenHome); }); s.appendChild(bk);
+  root.replaceChildren(s);
+}
+
+function adminEdit(q) {
+  var isNew = !q;
+  var data = q ? { id: q.id, topic: q.topic, difficulty: q.difficulty, text: q.text, options: q.options.slice(), correctIndex: q.correctIndex, explanation: q.explanation } : { topic: 'dice', difficulty: 'easy', text: '', options: ['', '', '', ''], correctIndex: 0, explanation: '' };
+  var s = el('div', 'screen home');
+  s.appendChild(el('h1', null, isNew ? 'เพิ่มโจทย์ใหม่' : 'แก้ไขโจทย์'));
+
+  var c = el('div', 'card admin-form');
+  // topic + difficulty
+  var rowTD = el('div', 'form-row2');
+  var topicSel = selectField('หัวข้อ', [['dice', 'ลูกเต๋า'], ['coin', 'เหรียญ'], ['card', 'ไพ่'], ['ball', 'ลูกบอล'], ['mixed', 'อื่นๆ']], data.topic);
+  var difSel = selectField('ความยาก', [['easy', 'ง่าย'], ['medium', 'ปานกลาง'], ['hard', 'ยาก']], data.difficulty);
+  rowTD.appendChild(topicSel.wrap); rowTD.appendChild(difSel.wrap); c.appendChild(rowTD);
+  // question text
+  c.appendChild(el('label', 'field-label', 'คำถาม'));
+  var qtext = el('textarea', 'text-input'); qtext.rows = 2; qtext.value = data.text; c.appendChild(qtext);
+  // options
+  c.appendChild(el('label', 'field-label', 'ตัวเลือก 4 ข้อ (เลือกวงกลมหน้าข้อที่ถูก)'));
+  var optInputs = [];
+  var correctIdx = data.correctIndex;
+  data.options.forEach(function (opt, i) {
+    var orow = el('div', 'opt-row');
+    var radio = el('button', 'opt-radio' + (i === correctIdx ? ' on' : ''), i === correctIdx ? '●' : '○');
+    radio.addEventListener('click', function () { correctIdx = i; Array.prototype.forEach.call(orow.parentNode.querySelectorAll('.opt-radio'), function (rr, j) { rr.className = 'opt-radio' + (j === correctIdx ? ' on' : ''); rr.textContent = j === correctIdx ? '●' : '○'; }); });
+    var oin = el('input', 'text-input'); oin.value = opt; oin.placeholder = 'ตัวเลือกที่ ' + (i + 1);
+    optInputs.push(oin);
+    orow.appendChild(radio); orow.appendChild(oin); c.appendChild(orow);
+  });
+  // explanation
+  c.appendChild(el('label', 'field-label', 'คำอธิบายเฉลย'));
+  var expl = el('textarea', 'text-input'); expl.rows = 2; expl.value = data.explanation; c.appendChild(expl);
+  var msg = el('p', 'warn-text', ''); msg.style.display = 'none'; c.appendChild(msg);
+  s.appendChild(c);
+
+  var save = el('button', 'btn-primary', isNew ? 'บันทึกโจทย์' : 'บันทึกการแก้ไข');
+  save.addEventListener('click', async function () {
+    var payload = { topic: topicSel.get(), difficulty: difSel.get(), text: qtext.value.trim(), options: optInputs.map(function (i) { return i.value.trim(); }), correctIndex: correctIdx, explanation: expl.value.trim() };
+    if (!payload.text || payload.options.some(function (o) { return !o; })) { msg.textContent = 'กรอกคำถามและตัวเลือกให้ครบทั้ง 4 ข้อ'; msg.style.display = 'block'; return; }
+    save.disabled = true; save.textContent = 'กำลังบันทึก...';
+    try { if (isNew) await API.addQuestion(_adminPin, payload); else { payload.id = data.id; await API.updateQuestion(_adminPin, payload); } adminManager(); }
+    catch (e) { msg.textContent = e.message || 'บันทึกไม่สำเร็จ'; msg.style.display = 'block'; save.disabled = false; save.textContent = 'บันทึก'; }
+  });
+  s.appendChild(save);
+  var bk = el('button', 'btn-secondary', 'ยกเลิก'); bk.addEventListener('click', function () { adminManager(); }); s.appendChild(bk);
+  root.replaceChildren(s);
+}
+
+function selectField(label, options, current) {
+  var wrap = el('div', 'field-col');
+  wrap.appendChild(el('label', 'field-label', label));
+  var sel = el('select', 'text-input');
+  options.forEach(function (o) { var op = el('option', null, o[1]); op.value = o[0]; if (o[0] === current) op.selected = true; sel.appendChild(op); });
+  wrap.appendChild(sel);
+  return { wrap: wrap, get: function () { return sel.value; } };
+}
+
+function adminDelete(q) {
+  var s = el('div', 'screen home');
+  s.appendChild(el('h1', null, 'ยืนยันการลบ'));
+  var c = el('div', 'card'); c.appendChild(el('p', 'question-text', q.text)); c.appendChild(el('p', 'hint', 'ลบแล้วกู้คืนไม่ได้')); s.appendChild(c);
+  var del = el('button', 'btn-primary', 'ลบโจทย์นี้'); del.style.background = 'var(--danger)';
+  del.addEventListener('click', async function () { del.disabled = true; del.textContent = 'กำลังลบ...'; try { await API.deleteQuestion(_adminPin, q.id); adminManager(); } catch (e) { del.textContent = 'ลบไม่สำเร็จ'; } });
+  s.appendChild(del);
+  var bk = el('button', 'btn-secondary', 'ยกเลิก'); bk.addEventListener('click', function () { adminManager(); }); s.appendChild(bk);
+  root.replaceChildren(s);
+}
 
 // extra styles for boss/pvp injected (kept out of main CSS for brevity)
 var extra = document.createElement('style');
